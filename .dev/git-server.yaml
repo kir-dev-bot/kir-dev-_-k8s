@@ -1,0 +1,80 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: git-server
+  namespace: argocd
+spec:
+  selector:
+    app: git-server
+  ports:
+    - port: 9418
+      targetPort: 9418
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: git-server-repos
+  namespace: argocd
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 100Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: git-server
+  namespace: argocd
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: git-server
+  template:
+    metadata:
+      labels:
+        app: git-server
+    spec:
+      containers:
+        - name: git
+          image: nixery.dev/shell/git
+          command: [ bash, -c ]
+          args:
+            - |
+              set -e
+              if [ ! -d /srv/k8s.git ]; then
+                git init --bare --initial-branch=main /srv/k8s.git
+              fi
+              git -C /srv/k8s.git config daemon.receivepack true
+              exec git daemon --reuseaddr --export-all --enable=receive-pack --base-path=/srv --listen=0.0.0.0 --port=9418
+          ports:
+            - containerPort: 9418
+          readinessProbe:
+            exec:
+              command:
+                - git
+                - ls-remote
+                - git://127.0.0.1:9418/k8s.git
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+              ephemeral-storage: 0
+            limits:
+              cpu: 200m
+              memory: 128Mi
+              ephemeral-storage: 200Mi
+          volumeMounts:
+            - name: repos
+              mountPath: /srv
+      volumes:
+        - name: repos
+          persistentVolumeClaim:
+            claimName: git-server-repos

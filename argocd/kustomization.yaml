@@ -22,10 +22,50 @@ helmCharts:
           # https://argo-cd.readthedocs.io/en/stable/user-guide/kustomize/#kustomizing-helm-charts
           kustomize.buildOptions: "--enable-helm"
 
+        params:
+          # Serialize manifest generation. cdk8s apps are allowed to be
+          # processed concurrently (ArgoCD does so for all non-kustomize
+          # sources), but they share the bun/cdk8s caches and each
+          # `cdk8s:import` fans out to 16 processes — concurrent generations
+          # race on the cache and can OOM the sidecar.
+          # https://argo-cd.readthedocs.io/en/stable/operator-manual/argocd-cmd-params-cm.yaml
+          reposerver.parallelism.limit: "1"
+
+        # Configure our Config Management Plugin for cdk8s apps
+        # https://argo-cd.readthedocs.io/en/stable/operator-manual/config-management-plugins/
+        cmp:
+          create: true
+          plugins:
+            cdk8s:
+              discover:
+                fileName: "app.ts"
+              init:
+                command: [ bash, -c ]
+                args:
+                  - |
+                    set -e
+                    # Use the same volume as where the git repo is, so that node_modules can be hard-linked instead of copied.
+                    export BUN_INSTALL_CACHE_DIR=/tmp/bun
+                    export CDK8S_IMPORT_CACHE=/tmp/cdk8s-imports
+
+                    cd ..
+                    bun install --frozen-lockfile
+                    bun run cdk8s:import
+                    bun run cdk8s:synth $ARGOCD_APP_NAME
+              generate:
+                command: [ bash, -c ]
+                args:
+                  - |
+                    # put a --- between files
+                    for f in ../dist/$ARGOCD_APP_NAME/*.k8s.yaml; do
+                      printf -- '---\n'
+                      cat "$f"
+                    done
+
       global:
         networkPolicy:
           create: true
-      
+
       # resource requests/limits are from https://github.com/argoproj/argo-helm/blob/main/charts/argo-cd/values.yaml
       # nvm they are useless
       controller:
@@ -109,6 +149,51 @@ helmCharts:
               cpu: 50m
               memory: 32Mi
               ephemeral-storage: 50Mi
+
+        # Sidecar running the `cdk8s` CMP
+        extraContainers:
+          - name: cmp-cdk8s
+            command: [ "/var/run/argocd/argocd-cmp-server" ]
+            image: nixery.dev/shell/bun/kubernetes-helm/nodejs
+            imagePullPolicy: IfNotPresent
+            env:
+              # bun needs a writable HOME for its install cache; /tmp is the cmp-tmp emptyDir.
+              - name: HOME
+                value: /tmp
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 999
+            # Explicit requests/limits are required: the local vCluster doesn't
+            # reflect injected defaults, and an ArgoCD controller panics
+            # ("assignment to entry in nil map") on containers with none.
+            resources:
+              requests:
+                cpu: 100m
+                memory: 256Mi
+                ephemeral-storage: 0
+              limits:
+                cpu: 2000m
+                memory: 4Gi
+                ephemeral-storage: 2Gi
+            volumeMounts:
+              - mountPath: /var/run/argocd
+                name: var-files
+              - mountPath: /home/argocd/cmp-server/plugins
+                name: plugins
+              - mountPath: /home/argocd/cmp-server/config/plugin.yaml
+                subPath: cdk8s.yaml
+                name: argocd-cmp-cm
+              # Do not share the repo-server's /tmp volume (path traversal mitigation).
+              - mountPath: /tmp
+                name: cmp-tmp
+
+        volumes:
+          - name: argocd-cmp-cm
+            configMap:
+              name: argocd-cmp-cm
+          - name: cmp-tmp
+            emptyDir: { }
+
         resources:
           limits:
             cpu: 700m
