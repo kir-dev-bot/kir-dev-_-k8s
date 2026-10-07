@@ -10,12 +10,12 @@ import * as cnpg from "../imports/postgresql.cnpg.io.ts";
 import * as barman from "../imports/barmancloud.cnpg.io.ts";
 import * as garage from "../imports/garage.rajsingh.info.ts";
 import * as traefik from "../imports/traefik.io.ts";
-import {ApiObject} from "cdk8s";
-import {versions} from "./versions.ts";
-import {singletonApp} from "../.dev/cdk8s-utils.ts";
-import {DevStorageClass, ProdStorageClass, storageClass} from "../.dev/storageClass.ts";
+import { ApiObject } from "cdk8s";
+import { versions } from "./versions.ts";
+import { singletonApp } from "../.dev/cdk8s-utils.ts";
+import { DevStorageClass, ProdStorageClass, storageClass } from "../.dev/storageClass.ts";
 
-export default singletonApp({namespace: "ehk", createNamespace: true}, (scope) => {
+export default singletonApp({ namespace: "ehk", createNamespace: true }, (scope) => {
     const labels = {
         "app.kubernetes.io/name": "ehk",
         "app.kubernetes.io/instance": "ehk",
@@ -24,10 +24,11 @@ export default singletonApp({namespace: "ehk", createNamespace: true}, (scope) =
     };
 
     // Per-app Backblaze B2 bucket, shared by the CNPG/Barman DB backups and
-    // the Velero garage-volume backups (Velero gets its own `velero` prefix so
-    // the two don't clash). The credentials are per app too: the Barman
-    // ObjectStore uses `ehk-backups-secrets` in this namespace, Velero uses
-    // `ehk-backups` in its own namespace (see below).
+    // the VolSync/restic garage-volume backups. The two keep their data apart
+    // by prefix (`postgres/` for Barman, `restic/` for VolSync). The
+    // credentials are per app too: the Barman ObjectStore uses
+    // `ehk-backups-secrets` in this namespace, VolSync uses a per-volume
+    // `garage-{data,metadata}-backup` secret (see below).
     const backupBucket = environment.environment == "Production" ? "kir-dev-ehk-backups" : "ehk-test";
     const backupEndpoint = "https://s3.eu-central-003.backblazeb2.com";
     const backupRegion = "eu-central-003";
@@ -35,7 +36,7 @@ export default singletonApp({namespace: "ehk", createNamespace: true}, (scope) =
     new kube.KubeConfigMap(scope, "ehk-config", {
         metadata: {
             name: "ehk-config",
-            annotations: {"argocd.argoproj.io/sync-wave": "-25"},
+            annotations: { "argocd.argoproj.io/sync-wave": "-25" },
         },
         data: {
             NODE_ENV: "production",
@@ -53,14 +54,14 @@ export default singletonApp({namespace: "ehk", createNamespace: true}, (scope) =
     new kube.KubeSecret(scope, "ehk-secrets", {
         metadata: {
             name: "ehk-secrets",
-            annotations: {"argocd.argoproj.io/sync-wave": "-25"},
+            annotations: { "argocd.argoproj.io/sync-wave": "-25" },
         },
         ...(environment.environment != "Production"
             ? {
-                stringData: {
-                    PAYLOAD_SECRET: "local-development-secret",
-                },
-            }
+                  stringData: {
+                      PAYLOAD_SECRET: "local-development-secret",
+                  },
+              }
             : {}),
     });
 
@@ -84,7 +85,7 @@ export default singletonApp({namespace: "ehk", createNamespace: true}, (scope) =
     new barman.ObjectStore(scope, "ehk-backups", {
         metadata: {
             name: "ehk-backups",
-            annotations: {"argocd.argoproj.io/sync-wave": "-21"},
+            annotations: { "argocd.argoproj.io/sync-wave": "-21" },
         },
         spec: {
             instanceSidecarConfiguration: {
@@ -107,8 +108,8 @@ export default singletonApp({namespace: "ehk", createNamespace: true}, (scope) =
                 destinationPath: `s3://${backupBucket}/postgres/`,
                 endpointUrl: backupEndpoint,
                 s3Credentials: {
-                    accessKeyId: {name: "ehk-backups-secrets", key: "ACCESS_KEY_ID"},
-                    secretAccessKey: {name: "ehk-backups-secrets", key: "ACCESS_SECRET_KEY"},
+                    accessKeyId: { name: "ehk-backups-secrets", key: "ACCESS_KEY_ID" },
+                    secretAccessKey: { name: "ehk-backups-secrets", key: "ACCESS_SECRET_KEY" },
                 },
                 wal: {
                     compression: barman.ObjectStoreSpecConfigurationWalCompression.GZIP,
@@ -127,7 +128,7 @@ export default singletonApp({namespace: "ehk", createNamespace: true}, (scope) =
                 "app.kubernetes.io/component": "database",
                 "app.kubernetes.io/part-of": "ehk",
             },
-            annotations: {"argocd.argoproj.io/sync-wave": "-20"},
+            annotations: { "argocd.argoproj.io/sync-wave": "-20" },
         },
         spec: {
             primaryUpdateStrategy: cnpg.ClusterSpecPrimaryUpdateStrategy.UNSUPERVISED,
@@ -135,7 +136,7 @@ export default singletonApp({namespace: "ehk", createNamespace: true}, (scope) =
             instances: 2,
             imageName: "ghcr.io/cloudnative-pg/postgresql:17.5",
             imagePullPolicy: "IfNotPresent",
-            monitoring: {enablePodMonitor: true},
+            monitoring: { enablePodMonitor: true },
             postgresql: {
                 parameters: {
                     wal_level: "replica",
@@ -164,7 +165,7 @@ export default singletonApp({namespace: "ehk", createNamespace: true}, (scope) =
                     name: "barman-cloud.cloudnative-pg.io",
                     enabled: true, // needed otherwise ArgoCD complains
                     isWalArchiver: true,
-                    parameters: {barmanObjectName: "ehk-backups"},
+                    parameters: { barmanObjectName: "ehk-backups" },
                 },
             ],
             bootstrap: {
@@ -177,13 +178,13 @@ export default singletonApp({namespace: "ehk", createNamespace: true}, (scope) =
     });
 
     new cnpg.ScheduledBackup(scope, "ehk-db-backup", {
-        metadata: {name: "ehk-db-backup"},
+        metadata: { name: "ehk-db-backup" },
         spec: {
-            cluster: {name: "ehk-db"},
+            cluster: { name: "ehk-db" },
             schedule: "0 18 3 * * *", // At 3:18 every day
             backupOwnerReference: cnpg.ScheduledBackupSpecBackupOwnerReference.SELF,
             method: cnpg.ScheduledBackupSpecMethod.PLUGIN,
-            pluginConfiguration: {name: "barman-cloud.cloudnative-pg.io"},
+            pluginConfiguration: { name: "barman-cloud.cloudnative-pg.io" },
         },
     });
 
@@ -192,12 +193,36 @@ export default singletonApp({namespace: "ehk", createNamespace: true}, (scope) =
     // The startup probe below deliberately hits a Payload route so the pod only
     // becomes Ready after that initialization (and thus the migrations) finishes.
 
-    const garageLabels = {"app.kubernetes.io/name": "ehk-garage", "app.kubernetes.io/part-of": "ehk"};
+    const garageLabels = {
+        "app.kubernetes.io/name": "ehk-garage",
+        "app.kubernetes.io/part-of": "ehk",
+    };
+    // Leftover from the abandoned Velero `Schedule`; nothing selects on it now
+    // (VolSync picks the PVCs by name). It stays because the garage-operator
+    // treats `storage.labels` as immutable while replicas are live, and the
+    // running prod cluster already carries it — removing it is rejected
+    // ("... labels ... are immutable while replicas are live"). Do not spread it
+    // onto `garageLabels`: that part is mutable and unused.
+    const garageBackupLabels = { "backup.kir-dev.hu/ehk-garage": "true" };
     const storageClassName = storageClass(ProdStorageClass.memorySsd, DevStorageClass.snapshottableHostPath);
-    // The garage-operator does not copy the GarageCluster's labels onto the
-    // PVCs it creates, so the storage roles carry an explicit label that the
-    // Velero Schedule below selects on.
-    const garageBackupLabels = {"backup.kir-dev.hu/ehk-garage": "true"};
+
+    // VolSync restores a snapshot by creating a new volume from it, so it needs
+    // an explicit VolumeSnapshotClass: the host's class is synced into the
+    // vCluster but is not marked as the default.
+    const volumeSnapshotClassName =
+        environment.environment == "Production"
+            ? // The `memory-ssd` StorageClass is Ceph RBD (`rbd.csi.ceph.com`), so
+              // the matching (RBD) VolumeSnapshotClass is ironically called
+              // `memory`; `memory-ssd` is the CephFS one. (There is no
+              // `csi-rbdplugin-snapclass`.)
+              "memory"
+            : "csi-hostpath-snapclass";
+
+    // Set to "recovery" to bootstrap garage from the latest VolSync backup
+    // instead of creating it empty, then set it back to "init" once the restore
+    // has completed. This is the restic equivalent of `startsch/app.ts`'s CNPG
+    // `bootstrap.recovery` switch.
+    const garageBootstrap = "init" as "init" | "recovery";
 
     // Static admin bootstrap token. The operator uses it to drive Garage's
     // Admin API; GarageAdminToken writes it into the `ehk-garage-admin` secret
@@ -207,11 +232,11 @@ export default singletonApp({namespace: "ehk", createNamespace: true}, (scope) =
         metadata: {
             name: "ehk-garage-admin",
             labels: garageLabels,
-            annotations: {"argocd.argoproj.io/sync-wave": "-30"},
+            annotations: { "argocd.argoproj.io/sync-wave": "-30" },
         },
         spec: {
-            clusterRef: {name: "ehk-garage"},
-            secretTemplate: {name: "ehk-garage-admin", tokenKey: "admin-token"},
+            clusterRef: { name: "ehk-garage" },
+            secretTemplate: { name: "ehk-garage-admin", tokenKey: "admin-token" },
         },
     });
 
@@ -219,26 +244,53 @@ export default singletonApp({namespace: "ehk", createNamespace: true}, (scope) =
         metadata: {
             name: "ehk-garage",
             labels: garageLabels,
-            annotations: {"argocd.argoproj.io/sync-wave": "-20"},
+            annotations: { "argocd.argoproj.io/sync-wave": "-20" },
         },
         spec: {
             zone: "default",
-            replication: {factor: 1},
+            replication: { factor: 1 },
             storage: {
                 replicas: 1,
+                // Declared explicitly (like the GarageKey defaults below):
+                // the operator only defaults these, and ArgoCD would
+                // otherwise see the GarageCluster as OutOfSync and trip the
+                // operator's immutable-storage admission webhook.
+                dataFsync: false,
+                metadataFsync: false,
                 metadata: {
+                    type: garage.GarageClusterV1Beta2SpecStorageMetadataType.PERSISTENT_VOLUME_CLAIM,
                     size: garage.GarageClusterV1Beta2SpecStorageMetadataSize.fromString("1Gi"),
                     storageClassName,
                     labels: garageBackupLabels,
+                    // On recovery the operator creates this PVC from the
+                    // restored CSI snapshot instead of an empty one, so the PVC
+                    // stays operator-owned (see the recovery branch below).
+                    dataSourceRef:
+                        garageBootstrap === "recovery"
+                            ? {
+                                  apiGroup: "snapshot.storage.k8s.io",
+                                  kind: "VolumeSnapshot",
+                                  name: "garage-metadata-restore-snap",
+                              }
+                            : undefined,
                 },
                 data: {
+                    type: garage.GarageClusterV1Beta2SpecStorageDataType.PERSISTENT_VOLUME_CLAIM,
                     size: garage.GarageClusterV1Beta2SpecStorageDataSize.fromString("5Gi"),
                     storageClassName,
                     labels: garageBackupLabels,
+                    dataSourceRef:
+                        garageBootstrap === "recovery"
+                            ? {
+                                  apiGroup: "snapshot.storage.k8s.io",
+                                  kind: "VolumeSnapshot",
+                                  name: "garage-data-restore-snap",
+                              }
+                            : undefined,
                 },
                 // A single-node cluster cannot tolerate any disruption anyway,
                 // and a PDB would block draining the node.
-                podDisruptionBudget: {enabled: false},
+                podDisruptionBudget: { enabled: false },
                 resources: {
                     requests: {
                         cpu: garage.GarageClusterV1Beta2SpecStorageResourcesRequests.fromString("50m"),
@@ -254,12 +306,12 @@ export default singletonApp({namespace: "ehk", createNamespace: true}, (scope) =
             },
             network: {
                 rpcBindPort: 3901,
-                service: {type: garage.GarageClusterV1Beta2SpecNetworkServiceType.CLUSTER_IP},
+                service: { type: garage.GarageClusterV1Beta2SpecNetworkServiceType.CLUSTER_IP },
             },
-            s3Api: {bindPort: 3900, region: "us-east-1"},
+            s3Api: { bindPort: 3900, region: "us-east-1" },
             admin: {
                 bindPort: 3903,
-                adminTokenSecretRef: {name: "ehk-garage-admin", key: "admin-token"},
+                adminTokenSecretRef: { name: "ehk-garage-admin", key: "admin-token" },
             },
         },
     });
@@ -268,9 +320,9 @@ export default singletonApp({namespace: "ehk", createNamespace: true}, (scope) =
         metadata: {
             name: "ehk-media",
             labels: garageLabels,
-            annotations: {"argocd.argoproj.io/sync-wave": "-15"},
+            annotations: { "argocd.argoproj.io/sync-wave": "-15" },
         },
-        spec: {clusterRef: {name: "ehk-garage"}, globalAlias: "ehk-media"},
+        spec: { clusterRef: { name: "ehk-garage" }, globalAlias: "ehk-media" },
     });
 
     // S3 credentials. The operator generates the key pair into the
@@ -280,10 +332,10 @@ export default singletonApp({namespace: "ehk", createNamespace: true}, (scope) =
         metadata: {
             name: "ehk-media",
             labels: garageLabels,
-            annotations: {"argocd.argoproj.io/sync-wave": "-10"},
+            annotations: { "argocd.argoproj.io/sync-wave": "-10" },
         },
         spec: {
-            clusterRef: {name: "ehk-garage"},
+            clusterRef: { name: "ehk-garage" },
             name: "ehk-media",
             // These are the operator's defaults. Declaring them explicitly keeps
             // ArgoCD from reporting the resource as OutOfSync forever, since the
@@ -303,89 +355,145 @@ export default singletonApp({namespace: "ehk", createNamespace: true}, (scope) =
                 credentialsFileKey: "credentials",
                 credentialsFileProfile: "default",
             },
-            bucketPermissions: [{bucketRef: {name: "ehk-media"}, read: true, write: true, owner: false}],
+            bucketPermissions: [{ bucketRef: { name: "ehk-media" }, read: true, write: true, owner: false }],
         },
     });
 
-    // Disable Velero (backup) stuff until Volume Snapshots are available in prod
-    if (false!) {
-        // The BackupStorageLocation (and its credential Secret) must live in the
-        // Velero namespace, so they are declared here but namespaced to `velero`.
-        // Velero writes under the `velero` prefix of the shared bucket; Barman uses
-        // the bucket root (see the ObjectStore above).
-        new kube.KubeSecret(scope, "ehk-velero-backups-secret", {
+    // Back up the garage volumes (data + metadata) to Backblaze B2 with VolSync
+    // + restic, one repository per PVC (VolSync does not support shared repos).
+    // Each backup takes a CSI snapshot of the PVC (`copyMethod: Snapshot`) and
+    // restics it off-site. On recovery VolSync restores into a dedicated PVC
+    // and snapshots it under a fixed name; the operator then creates its own
+    // PVC from that VolumeSnapshot (the GarageCluster's `dataSourceRef`).
+    //
+    // The PVC names are the ones the garage-operator's StatefulSet creates:
+    // `<volumeClaimTemplate>-<statefulset>-<ordinal>` = data-...-0-0 / metadata-...-0-0.
+    const garageVolumes = [
+        {
+            name: "data",
+            pvc: "data-ehk-garage-storage-0-0",
+            size: "5Gi",
+            restorePvc: "garage-data-restore",
+            restoreSnapshot: "garage-data-restore-snap",
+        },
+        {
+            name: "metadata",
+            pvc: "metadata-ehk-garage-storage-0-0",
+            size: "1Gi",
+            restorePvc: "garage-metadata-restore",
+            restoreSnapshot: "garage-metadata-restore-snap",
+        },
+    ] as const;
+
+    for (const volume of garageVolumes) {
+        const repository = `garage-${volume.name}-backup`;
+        // The connection info is filled in manually (see README); only the
+        // (non-secret) repository URL is declared here.
+        new kube.KubeSecret(scope, `${repository}-secret`, {
             metadata: {
-                name: "ehk-backups",
-                namespace: "velero",
+                name: repository,
                 annotations: {
-                    // The credentials are filled in manually; keep ArgoCD from
-                    // pruning the extra `data` key it doesn't declare.
+                    // The restic ReplicationSource/Destination below consumes this
+                    // secret, so create it first.
+                    "argocd.argoproj.io/sync-wave": "-26",
+                    // Only (non-secret) connection info is declared in Git; the
+                    // credentials are set manually. IgnoreExtraneous keeps ArgoCD
+                    // from pruning those extra keys (same pattern as
+                    // `ehk-backups-secrets`), so no global `ignoreDifferences` is
+                    // needed.
                     "argocd.argoproj.io/compare-options": "IgnoreExtraneous",
                 },
             },
-            // Set manually (same Backblaze B2 application key as
-            // `ehk-backups-secrets`, in Velero's credentials-file format):
+            stringData: {
+                RESTIC_REPOSITORY: `s3:${backupEndpoint}/${backupBucket}/restic/${volume.pvc}`,
+                AWS_DEFAULT_REGION: backupRegion,
+            },
+            // Set manually:
             // stringData:
-            //   cloud: |
-            //     [default]
-            //     aws_access_key_id=
-            //     aws_secret_access_key=
+            //   RESTIC_PASSWORD:
+            //   AWS_ACCESS_KEY_ID:
+            //   AWS_SECRET_ACCESS_KEY:
         });
 
-        new ApiObject(scope, "ehk-velero-backup-location", {
-            apiVersion: "velero.io/v1",
-            kind: "BackupStorageLocation",
-            metadata: {name: "ehk", namespace: "velero"},
-            spec: {
-                provider: "aws",
-                objectStorage: {bucket: backupBucket, prefix: "velero"},
-                credential: {name: "ehk-backups", key: "cloud"},
-                config: {
-                    region: backupRegion,
-                    s3Url: backupEndpoint,
-                    s3ForcePathStyle: "true",
-                    // Backblaze B2 needs the AWS SDK v2 checksum middleware disabled.
-                    checksumAlgorithm: "",
+        if (garageBootstrap === "init") {
+            new ApiObject(scope, `${repository}-source`, {
+                apiVersion: "volsync.backube/v1alpha1",
+                kind: "ReplicationSource",
+                metadata: {
+                    name: repository,
+                    annotations: { "argocd.argoproj.io/sync-wave": "-25" },
                 },
-            },
-        });
+                spec: {
+                    sourcePVC: volume.pvc,
+                    trigger: { schedule: "45 3 * * *" },
+                    restic: {
+                        repository,
+                        copyMethod: "Snapshot",
+                        volumeSnapshotClassName,
+                        retain: { daily: 7, weekly: 4, monthly: 6 },
+                        pruneIntervalDays: 7,
+                    },
+                },
+            });
+        } else {
+            // On recovery: restore the repo into a dedicated PVC, then let
+            // VolSync snapshot it under a fixed name (the destination PVC's
+            // `volsync.backube/snapname` annotation pins the VolumeSnapshot
+            // name). The GarageCluster's `dataSourceRef` points at that
+            // snapshot, so the operator provisions its own PVC from the CSI
+            // snapshot — which vCluster syncs correctly, unlike the populator.
+            new kube.KubePersistentVolumeClaim(scope, `${repository}-restore-pvc`, {
+                metadata: {
+                    name: volume.restorePvc,
+                    annotations: {
+                        // The ReplicationDestination restores into this PVC
+                        // (wave -24); create the PVC before it.
+                        "argocd.argoproj.io/sync-wave": "-25",
+                        "volsync.backube/snapname": volume.restoreSnapshot,
+                    },
+                },
+                spec: {
+                    accessModes: ["ReadWriteOnce"],
+                    storageClassName,
+                    resources: { requests: { storage: kube.Quantity.fromString(volume.size) } },
+                },
+            });
 
-        // The Schedule must also live in the Velero namespace (Velero only
-        // reconciles Backup/Schedule resources there); `includedNamespaces` still
-        // selects the ehk namespace below.
-        new ApiObject(scope, "ehk-garage-backup", {
-            apiVersion: "velero.io/v1",
-            kind: "Schedule",
-            metadata: {name: "ehk-garage", namespace: "velero"},
-            spec: {
-                schedule: "30 3 * * *",
-                template: {
-                    includedNamespaces: ["ehk"],
-                    labelSelector: {matchLabels: garageBackupLabels},
-                    storageLocation: "ehk",
-                    snapshotVolumes: true,
-                    defaultVolumesToFsBackup: false,
-                    ttl: "720h",
+            new ApiObject(scope, `${repository}-destination`, {
+                apiVersion: "volsync.backube/v1alpha1",
+                kind: "ReplicationDestination",
+                metadata: {
+                    name: repository,
+                    annotations: { "argocd.argoproj.io/sync-wave": "-24" },
                 },
-            },
-        });
+                spec: {
+                    trigger: { manual: "restore-once" },
+                    restic: {
+                        repository,
+                        destinationPVC: volume.restorePvc,
+                        copyMethod: "Snapshot",
+                        volumeSnapshotClassName,
+                    },
+                },
+            });
+        }
     }
 
     new kube.KubeService(scope, "ehk-service", {
-        metadata: {name: "ehk", labels},
+        metadata: { name: "ehk", labels },
         spec: {
             selector: labels,
-            ports: [{name: "http", port: 80, targetPort: kube.IntOrString.fromString("http")}],
+            ports: [{ name: "http", port: 80, targetPort: kube.IntOrString.fromString("http") }],
         },
     });
 
     new kube.KubeDeployment(scope, "ehk-deployment", {
-        metadata: {name: "ehk", labels},
+        metadata: { name: "ehk", labels },
         spec: {
             replicas: 1,
-            selector: {matchLabels: labels},
+            selector: { matchLabels: labels },
             template: {
-                metadata: {labels},
+                metadata: { labels },
                 spec: {
                     automountServiceAccountToken: false,
                     containers: [
@@ -393,43 +501,43 @@ export default singletonApp({namespace: "ehk", createNamespace: true}, (scope) =
                             name: "ehk",
                             image: versions.image,
                             imagePullPolicy: "IfNotPresent",
-                            ports: [{containerPort: 3000, protocol: "TCP", name: "http"}],
+                            ports: [{ containerPort: 3000, protocol: "TCP", name: "http" }],
                             env: [
                                 {
                                     name: "DATABASE_URI",
-                                    valueFrom: {secretKeyRef: {name: "ehk-db-app", key: "uri"}},
+                                    valueFrom: { secretKeyRef: { name: "ehk-db-app", key: "uri" } },
                                 },
                                 {
                                     name: "PAYLOAD_SECRET",
-                                    valueFrom: {secretKeyRef: {name: "ehk-secrets", key: "PAYLOAD_SECRET"}},
+                                    valueFrom: { secretKeyRef: { name: "ehk-secrets", key: "PAYLOAD_SECRET" } },
                                 },
                                 {
                                     name: "S3_ACCESS_KEY_ID",
-                                    valueFrom: {secretKeyRef: {name: "ehk-garage-s3", key: "access-key-id"}},
+                                    valueFrom: { secretKeyRef: { name: "ehk-garage-s3", key: "access-key-id" } },
                                 },
                                 {
                                     name: "S3_SECRET_ACCESS_KEY",
-                                    valueFrom: {secretKeyRef: {name: "ehk-garage-s3", key: "secret-access-key"}},
+                                    valueFrom: { secretKeyRef: { name: "ehk-garage-s3", key: "secret-access-key" } },
                                 },
                             ],
-                            envFrom: [{configMapRef: {name: "ehk-config"}}],
+                            envFrom: [{ configMapRef: { name: "ehk-config" } }],
                             // Hit a Payload route so Payload's initialization
                             // (including `prodMigrations`) completes before the
                             // pod reports Ready.
                             startupProbe: {
-                                httpGet: {path: "/admin", port: kube.IntOrString.fromString("http")},
+                                httpGet: { path: "/admin", port: kube.IntOrString.fromString("http") },
                                 periodSeconds: 5,
                                 timeoutSeconds: 3,
                                 failureThreshold: 60,
                             },
                             readinessProbe: {
-                                httpGet: {path: "/admin", port: kube.IntOrString.fromString("http")},
+                                httpGet: { path: "/admin", port: kube.IntOrString.fromString("http") },
                                 periodSeconds: 10,
                                 timeoutSeconds: 3,
                                 failureThreshold: 3,
                             },
                             livenessProbe: {
-                                tcpSocket: {port: kube.IntOrString.fromString("http")},
+                                tcpSocket: { port: kube.IntOrString.fromString("http") },
                                 periodSeconds: 20,
                                 timeoutSeconds: 3,
                                 failureThreshold: 6,
@@ -467,7 +575,7 @@ export default singletonApp({namespace: "ehk", createNamespace: true}, (scope) =
             },
             spec: {
                 ingressClassName: "traefik",
-                tls: [{hosts: ["ehk-de-most-mar-tenyleg.kir-dev.hu"], secretName: "ehk-temp-tls-cert"}],
+                tls: [{ hosts: ["ehk-de-most-mar-tenyleg.kir-dev.hu"], secretName: "ehk-temp-tls-cert" }],
                 rules: [
                     {
                         host: "ehk-de-most-mar-tenyleg.kir-dev.hu",
@@ -476,7 +584,7 @@ export default singletonApp({namespace: "ehk", createNamespace: true}, (scope) =
                                 {
                                     path: "/",
                                     pathType: "Prefix",
-                                    backend: {service: {name: "ehk", port: {name: "http"}}},
+                                    backend: { service: { name: "ehk", port: { name: "http" } } },
                                 },
                             ],
                         },
@@ -490,8 +598,8 @@ export default singletonApp({namespace: "ehk", createNamespace: true}, (scope) =
         // gets a 404), so override the Host header on the way out. A separate
         // Ingress keeps this middleware off the `/` route above.
         new traefik.Middleware(scope, "ehk-eszb-host-override", {
-            metadata: {name: "eszb-host-override", labels},
-            spec: {headers: {customRequestHeaders: {Host: "ehk.bme.hu"}}},
+            metadata: { name: "eszb-host-override", labels },
+            spec: { headers: { customRequestHeaders: { Host: "ehk.bme.hu" } } },
         });
 
         new kube.KubeIngress(scope, "ehk-eszb-test-ingress", {
@@ -506,7 +614,7 @@ export default singletonApp({namespace: "ehk", createNamespace: true}, (scope) =
             },
             spec: {
                 ingressClassName: "traefik",
-                tls: [{hosts: ["ehk-de-most-mar-tenyleg.kir-dev.hu"], secretName: "ehk-temp-tls-cert"}],
+                tls: [{ hosts: ["ehk-de-most-mar-tenyleg.kir-dev.hu"], secretName: "ehk-temp-tls-cert" }],
                 rules: [
                     {
                         host: "ehk-de-most-mar-tenyleg.kir-dev.hu",
@@ -515,7 +623,7 @@ export default singletonApp({namespace: "ehk", createNamespace: true}, (scope) =
                                 {
                                     path: "/eszb",
                                     pathType: "Prefix",
-                                    backend: {service: {name: "ehk-eszb", port: {name: "http"}}},
+                                    backend: { service: { name: "ehk-eszb", port: { name: "http" } } },
                                 },
                             ],
                         },
@@ -531,11 +639,11 @@ export default singletonApp({namespace: "ehk", createNamespace: true}, (scope) =
         // this value, so no DNS is involved. The original Host header
         // (ehk.bme.hu) is passed through unchanged by the middleware above.
         new kube.KubeService(scope, "ehk-eszb-service", {
-            metadata: {name: "ehk-eszb", labels},
+            metadata: { name: "ehk-eszb", labels },
             spec: {
                 type: "ExternalName",
                 externalName: "152.66.125.225",
-                ports: [{name: "http", port: 80}],
+                ports: [{ name: "http", port: 80 }],
             },
         });
     }
@@ -552,7 +660,7 @@ export default singletonApp({namespace: "ehk", createNamespace: true}, (scope) =
             },
             spec: {
                 ingressClassName: "traefik",
-                tls: [{hosts: ["ehk.bme.hu"], secretName: "ehk-tls-cert"}],
+                tls: [{ hosts: ["ehk.bme.hu"], secretName: "ehk-tls-cert" }],
                 rules: [
                     {
                         host: "ehk.bme.hu",
@@ -561,12 +669,12 @@ export default singletonApp({namespace: "ehk", createNamespace: true}, (scope) =
                                 {
                                     path: "/eszb",
                                     pathType: "Prefix",
-                                    backend: {service: {name: "ehk-eszb", port: {name: "http"}}},
+                                    backend: { service: { name: "ehk-eszb", port: { name: "http" } } },
                                 },
                                 {
                                     path: "/",
                                     pathType: "Prefix",
-                                    backend: {service: {name: "ehk", port: {name: "http"}}},
+                                    backend: { service: { name: "ehk", port: { name: "http" } } },
                                 },
                             ],
                         },
